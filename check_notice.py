@@ -51,7 +51,14 @@ async def get_notices():
 
         response = await response_info.value
         print(f"[API URL] {response.url}")
-        data = await response.json()
+        raw = await response.text()
+        print(f"[응답 앞 500자] {raw[:500]}")
+        try:
+            data = json.loads(raw)
+        except Exception as e:
+            print(f"[JSON 파싱 실패] {e}")
+            await browser.close()
+            return []
         print(f"[응답 키] {list(data.keys())}")
         items = data.get("items", [])
         print(f"[items 수] {len(items)}")
