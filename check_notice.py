@@ -60,11 +60,11 @@ async def get_latest_notice():
                 // 모든 이미지 URL 출력 (디버그)
                 const imgs = first.querySelectorAll('img');
                 const allImgs = Array.from(imgs).map(img => img.src);
-                // 프로필 이미지(ldb-phinf) 제외하고 첫 번째 이미지 추출
+                // 기본 프로필 아이콘 제외하고 첫 번째 이미지 추출
                 let image = null;
                 for (const img of imgs) {
                     const src = img.src || '';
-                    if (!src.includes('ldb-phinf')) {
+                    if (!src.includes('icon_feed_default_profile')) {
                         image = src;
                         break;
                     }
