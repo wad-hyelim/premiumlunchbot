@@ -8,7 +8,8 @@ from playwright.async_api import async_playwright
 PLACE_ID = "2015500490"
 SLACK_WEBHOOK_URL = os.environ["SLACK_WEBHOOK_URL"]
 LAST_NOTICE_FILE = "last_notice.json"
-FEED_URL = f"https://map.naver.com/p/entry/place/{PLACE_ID}?placePath=%2Ffeed"
+# iframe URL에 직접 접근
+FEED_URL = f"https://pcmap.place.naver.com/restaurant/{PLACE_ID}/feed?from=map&fromPanelNum=1&additionalHeight=76&locale=ko&svcName=map_pcv5"
 
 def load_last_notice():
     if not os.path.exists(LAST_NOTICE_FILE):
@@ -43,37 +44,40 @@ async def get_latest_notice():
         await page.goto(FEED_URL, wait_until="networkidle", timeout=30000)
         await asyncio.sleep(5)
 
-        # 렌더링된 DOM에서 피드 첫 번째 항목 추출
+        # 페이지 HTML 일부 출력 (디버그)
+        html = await page.content()
+        print(f"[HTML 앞 500자]\n{html[:500]}")
+
+        # DOM에서 피드 항목 추출 시도
         result = await page.evaluate("""
             () => {
-                // iframe 안에 렌더링되는 경우 확인
-                const iframe = document.querySelector('iframe#entryIframe');
-                const doc = iframe ? iframe.contentDocument : document;
-
-                // 피드/소식 관련 컨테이너 탐색
                 const selectors = [
-                    '[class*="feed_"] li',
-                    '[class*="post_"] li',
-                    '[class*="Feed"] li',
-                    '[class*="Post"] li',
+                    'li[class*="feed"]',
+                    'li[class*="post"]',
                     'li[class*="item"]',
+                    '[class*="FeedItem"]',
+                    '[class*="PostItem"]',
+                    'article',
+                    'li',
                 ];
-
                 for (const sel of selectors) {
-                    const items = doc.querySelectorAll(sel);
+                    const items = document.querySelectorAll(sel);
                     if (items.length > 0) {
                         const first = items[0];
-                        const text = first.innerText || first.textContent || '';
+                        const text = (first.innerText || '').trim().slice(0, 500);
                         const img = first.querySelector('img');
                         return {
                             selector: sel,
-                            text: text.trim().slice(0, 500),
+                            text: text,
                             image: img ? img.src : null,
                             count: items.length
                         };
                     }
                 }
-                return { error: 'no feed elements found', bodyPreview: doc.body.innerHTML.slice(0, 300) };
+                return {
+                    error: 'no elements found',
+                    bodyText: document.body.innerText.slice(0, 300)
+                };
             }
         """)
 
@@ -91,7 +95,6 @@ def main():
     text = result.get("text", "")
     image_url = result.get("image")
 
-    # 텍스트 해시를 ID로 사용
     notice_id = hashlib.md5(text.encode()).hexdigest()
     last_id = load_last_notice()
 
