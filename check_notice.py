@@ -8,7 +8,6 @@ from playwright.async_api import async_playwright
 PLACE_ID = "2015500490"
 SLACK_WEBHOOK_URL = os.environ["SLACK_WEBHOOK_URL"]
 LAST_NOTICE_FILE = "last_notice.json"
-# iframe URL에 직접 접근
 FEED_URL = f"https://pcmap.place.naver.com/restaurant/{PLACE_ID}/feed?from=map&fromPanelNum=1&additionalHeight=76&locale=ko&svcName=map_pcv5"
 
 def load_last_notice():
@@ -25,16 +24,34 @@ def send_slack(text, image_url=None):
     blocks = [
         {
             "type": "section",
-            "text": {"type": "mrkdwn", "text": f"*네이버 지도 새 소식*\n{text}"}
+            "text": {"type": "mrkdwn", "text": f"*🍱 프리미엄회사식당 새 소식*\n{text}"}
         }
     ]
     if image_url:
         blocks.append({
             "type": "image",
             "image_url": image_url,
-            "alt_text": "공지 이미지"
+            "alt_text": "소식 이미지"
         })
     requests.post(SLACK_WEBHOOK_URL, json={"blocks": blocks})
+
+def clean_text(raw):
+    # "프리미엄회사식당\n알림" 또는 "프리미엄회사식당\nNEW" 이후 본문 추출
+    lines = raw.split("\n")
+    result = []
+    skip_prefixes = {"프리미엄회사식당", "알림", "NEW", "공지", "좋아요", "좋아요1", "좋아요2", "좋아요3"}
+    for line in lines:
+        line = line.strip()
+        if not line:
+            continue
+        # 날짜 패턴이면 중단
+        if line.startswith("20") or "시간 전" in line or "일 전" in line:
+            break
+        # 중복/불필요 줄 스킵
+        if line in skip_prefixes or line.startswith("좋아요"):
+            continue
+        result.append(line)
+    return "\n".join(result)
 
 async def get_latest_notice():
     async with async_playwright() as p:
@@ -44,25 +61,21 @@ async def get_latest_notice():
         await page.goto(FEED_URL, wait_until="networkidle", timeout=30000)
         await asyncio.sleep(5)
 
-        # 페이지 HTML 일부 출력 (디버그)
-        html = await page.content()
-        print(f"[HTML 앞 500자]\n{html[:500]}")
-
-        # DOM에서 피드 항목 추출 시도
         result = await page.evaluate("""
             () => {
-                // 모든 li의 class와 텍스트 출력 (디버그)
-                const allLi = document.querySelectorAll('li');
-                const liInfo = Array.from(allLi).slice(0, 30).map(el => ({
-                    cls: el.className.slice(0, 80),
-                    text: (el.innerText || '').trim().slice(0, 80),
-                    hasImg: !!el.querySelector('img')
-                }));
-                return { liInfo };
+                const items = document.querySelectorAll('li.place_apply_pui.sjRRS');
+                if (items.length === 0) return { error: 'no feed items' };
+                const first = items[0];
+                const text = (first.innerText || '').trim();
+                const img = first.querySelector('img');
+                return {
+                    text: text,
+                    image: img ? img.src : null,
+                    count: items.length
+                };
             }
         """)
 
-        print(f"[DOM 결과] {json.dumps(result, ensure_ascii=False, indent=2)}")
         await browser.close()
         return result
 
@@ -70,22 +83,26 @@ def main():
     result = asyncio.run(get_latest_notice())
 
     if not result or "error" in result:
-        print("소식 없음")
+        print(f"소식 없음: {result}")
         return
 
-    text = result.get("text", "")
+    raw_text = result.get("text", "")
     image_url = result.get("image")
+    text = clean_text(raw_text)
 
-    notice_id = hashlib.md5(text.encode()).hexdigest()
+    notice_id = hashlib.md5(raw_text.encode()).hexdigest()
     last_id = load_last_notice()
+
+    print(f"[최신 소식] {text[:80]}")
 
     if notice_id == last_id:
         print("새 소식 없음")
         return
 
-    print(f"새 소식 감지!")
+    print("새 소식 감지! Slack 전송 중...")
     send_slack(text, image_url)
     save_last_notice(notice_id)
+    print("완료")
 
 if __name__ == "__main__":
     main()
