@@ -51,33 +51,14 @@ async def get_latest_notice():
         # DOM에서 피드 항목 추출 시도
         result = await page.evaluate("""
             () => {
-                const selectors = [
-                    'li[class*="feed"]',
-                    'li[class*="post"]',
-                    'li[class*="item"]',
-                    '[class*="FeedItem"]',
-                    '[class*="PostItem"]',
-                    'article',
-                    'li',
-                ];
-                for (const sel of selectors) {
-                    const items = document.querySelectorAll(sel);
-                    if (items.length > 0) {
-                        const first = items[0];
-                        const text = (first.innerText || '').trim().slice(0, 500);
-                        const img = first.querySelector('img');
-                        return {
-                            selector: sel,
-                            text: text,
-                            image: img ? img.src : null,
-                            count: items.length
-                        };
-                    }
-                }
-                return {
-                    error: 'no elements found',
-                    bodyText: document.body.innerText.slice(0, 300)
-                };
+                // 모든 li의 class와 텍스트 출력 (디버그)
+                const allLi = document.querySelectorAll('li');
+                const liInfo = Array.from(allLi).slice(0, 30).map(el => ({
+                    cls: el.className.slice(0, 80),
+                    text: (el.innerText || '').trim().slice(0, 80),
+                    hasImg: !!el.querySelector('img')
+                }));
+                return { liInfo };
             }
         """)
 
