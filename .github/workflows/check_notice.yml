@@ -1,0 +1,36 @@
+name: Check Naver Map Notice
+
+on:
+  schedule:
+    - cron: '*/30 * * * *'  # 30분마다
+  workflow_dispatch:  # 수동 실행 가능
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: pip install requests
+
+      - name: Run check
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+        run: python check_notice.py
+
+      - name: Commit last_notice.json
+        run: |
+          git config user.name "github-actions"
+          git config user.email "actions@github.com"
+          git add last_notice.json
+          git diff --staged --quiet || git commit -m "Update last_notice"
+          git push
