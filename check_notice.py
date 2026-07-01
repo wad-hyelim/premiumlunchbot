@@ -35,37 +35,29 @@ def send_slack(text, image_url=None):
     requests.post(SLACK_WEBHOOK_URL, json={"blocks": blocks})
 
 async def get_notices():
-    notices = []
-
     async with async_playwright() as p:
         browser = await p.chromium.launch()
         page = await browser.new_page()
 
-        async def handle_response(response):
-            # 리다이렉트(3xx)는 건너뜀
-            if response.status >= 300 and response.status < 400:
-                return
-            url = response.url
-            if "place.naver.com" not in url:
-                return
-            print(f"[API {response.status}] {url}")
-            try:
-                data = await response.json()
-                items = data.get("items", [])
-                if items:
-                    print(f"  → items {len(items)}개 발견")
-                    notices.extend(items)
-                else:
-                    print(f"  → 응답 키: {list(data.keys())}")
-            except Exception as e:
-                print(f"  → 파싱 실패: {e}")
+        def is_feed_response(response):
+            return (
+                "place.naver.com" in response.url
+                and "feed" in response.url
+                and response.status == 200
+            )
 
-        page.on("response", handle_response)
-        await page.goto(FEED_URL, wait_until="networkidle", timeout=30000)
-        await asyncio.sleep(5)
+        async with page.expect_response(is_feed_response, timeout=30000) as response_info:
+            await page.goto(FEED_URL, wait_until="domcontentloaded", timeout=30000)
+
+        response = await response_info.value
+        print(f"[API URL] {response.url}")
+        data = await response.json()
+        print(f"[응답 키] {list(data.keys())}")
+        items = data.get("items", [])
+        print(f"[items 수] {len(items)}")
+
         await browser.close()
-
-    return notices
+        return items
 
 def main():
     notices = asyncio.run(get_notices())
