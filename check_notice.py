@@ -1,13 +1,33 @@
 import json
 import os
-import asyncio
 import requests
-from playwright.async_api import async_playwright
+from datetime import datetime, timezone, timedelta
 
 PLACE_ID = "2015500490"
 SLACK_WEBHOOK_URL = os.environ["SLACK_WEBHOOK_URL"]
 LAST_NOTICE_FILE = "last_notice.json"
-FEED_URL = f"https://map.naver.com/p/entry/place/{PLACE_ID}?placePath=%2Ffeed"
+
+def get_timestamp():
+    kst = datetime.now(timezone(timedelta(hours=9)))
+    return kst.strftime("%Y%m%d%H%M")
+
+def get_notices():
+    url = (
+        f"https://pcmap.place.naver.com/place/{PLACE_ID}/feed"
+        f"?from=map&fromPanelNum=1&additionalHeight=76"
+        f"&timestamp={get_timestamp()}&locale=ko&svcName=map_pcv5"
+    )
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124.0.0.0 Safari/537.36",
+        "Referer": f"https://map.naver.com/p/entry/place/{PLACE_ID}?placePath=%2Ffeed",
+        "Accept": "application/json, text/plain, */*",
+    }
+    res = requests.get(url, headers=headers, allow_redirects=True)
+    print(f"[상태코드] {res.status_code}")
+    res.raise_for_status()
+    data = res.json()
+    print(f"[응답 키] {list(data.keys())}")
+    return data.get("items", [])
 
 def load_last_notice():
     if not os.path.exists(LAST_NOTICE_FILE):
@@ -34,40 +54,8 @@ def send_slack(text, image_url=None):
         })
     requests.post(SLACK_WEBHOOK_URL, json={"blocks": blocks})
 
-async def get_notices():
-    notices = []
-    all_urls = []
-
-    async with async_playwright() as p:
-        browser = await p.chromium.launch()
-        page = await browser.new_page()
-
-        async def handle_response(response):
-            url = response.url
-            all_urls.append(url)
-            if "place.naver.com" in url:
-                print(f"[API] {url}")
-                try:
-                    data = await response.json()
-                    items = data.get("items", [])
-                    if items:
-                        print(f"  → items 발견: {len(items)}개")
-                        notices.extend(items)
-                except Exception as e:
-                    print(f"  → JSON 파싱 실패: {e}")
-
-        page.on("response", handle_response)
-        await page.goto(FEED_URL, wait_until="networkidle", timeout=30000)
-        await asyncio.sleep(5)
-        await browser.close()
-
-    if not notices:
-        print(f"[디버그] 총 {len(all_urls)}개 요청 중 place.naver.com 없음")
-
-    return notices
-
 def main():
-    notices = asyncio.run(get_notices())
+    notices = get_notices()
 
     if not notices:
         print("소식 없음")
