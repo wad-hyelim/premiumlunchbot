@@ -1,6 +1,6 @@
 import json
 import os
-import re
+import hashlib
 import asyncio
 import requests
 from playwright.async_api import async_playwright
@@ -35,53 +35,73 @@ def send_slack(text, image_url=None):
         })
     requests.post(SLACK_WEBHOOK_URL, json={"blocks": blocks})
 
-async def get_notices():
+async def get_latest_notice():
     async with async_playwright() as p:
         browser = await p.chromium.launch()
         page = await browser.new_page()
 
         await page.goto(FEED_URL, wait_until="networkidle", timeout=30000)
-        await asyncio.sleep(3)
+        await asyncio.sleep(5)
 
-        # 방법 1: window.__INITIAL_STATE__ 또는 유사한 전역 변수 탐색
-        for var in ["__INITIAL_STATE__", "__PRELOADED_STATE__", "__STATE__", "naver"]:
-            try:
-                data = await page.evaluate(f"JSON.stringify(window['{var}'])")
-                if data and data != "undefined" and data != "null":
-                    print(f"[전역변수 발견] window.{var} (길이: {len(data)})")
-                    parsed = json.loads(data)
-                    # feed/items 키 탐색
-                    text_preview = json.dumps(parsed, ensure_ascii=False)[:300]
-                    print(f"  → 미리보기: {text_preview}")
-            except Exception as e:
-                print(f"[{var}] 없음")
-
-        # 방법 2: HTML 내 JSON 데이터 블록 탐색
-        html = await page.content()
-        patterns = [
-            r'"items"\s*:\s*\[.*?\]',
-            r'"feedList"\s*:\s*\[.*?\]',
-        ]
-        for pattern in patterns:
-            match = re.search(pattern, html, re.DOTALL)
-            if match:
-                print(f"[HTML 패턴 발견] {match.group(0)[:200]}")
-
-        # 방법 3: 피드 관련 DOM 요소 텍스트 추출
-        feed_texts = await page.evaluate("""
+        # 렌더링된 DOM에서 피드 첫 번째 항목 추출
+        result = await page.evaluate("""
             () => {
-                const els = document.querySelectorAll('[class*="feed"], [class*="Feed"], [class*="post"], [class*="Post"]');
-                return Array.from(els).slice(0, 5).map(el => el.innerText.slice(0, 100));
+                // iframe 안에 렌더링되는 경우 확인
+                const iframe = document.querySelector('iframe#entryIframe');
+                const doc = iframe ? iframe.contentDocument : document;
+
+                // 피드/소식 관련 컨테이너 탐색
+                const selectors = [
+                    '[class*="feed_"] li',
+                    '[class*="post_"] li',
+                    '[class*="Feed"] li',
+                    '[class*="Post"] li',
+                    'li[class*="item"]',
+                ];
+
+                for (const sel of selectors) {
+                    const items = doc.querySelectorAll(sel);
+                    if (items.length > 0) {
+                        const first = items[0];
+                        const text = first.innerText || first.textContent || '';
+                        const img = first.querySelector('img');
+                        return {
+                            selector: sel,
+                            text: text.trim().slice(0, 500),
+                            image: img ? img.src : null,
+                            count: items.length
+                        };
+                    }
+                }
+                return { error: 'no feed elements found', bodyPreview: doc.body.innerHTML.slice(0, 300) };
             }
         """)
-        if feed_texts:
-            print(f"[DOM 피드 요소] {feed_texts}")
 
+        print(f"[DOM 결과] {json.dumps(result, ensure_ascii=False, indent=2)}")
         await browser.close()
-    return []
+        return result
 
 def main():
-    asyncio.run(get_notices())
+    result = asyncio.run(get_latest_notice())
+
+    if not result or "error" in result:
+        print("소식 없음")
+        return
+
+    text = result.get("text", "")
+    image_url = result.get("image")
+
+    # 텍스트 해시를 ID로 사용
+    notice_id = hashlib.md5(text.encode()).hexdigest()
+    last_id = load_last_notice()
+
+    if notice_id == last_id:
+        print("새 소식 없음")
+        return
+
+    print(f"새 소식 감지!")
+    send_slack(text, image_url)
+    save_last_notice(notice_id)
 
 if __name__ == "__main__":
     main()
