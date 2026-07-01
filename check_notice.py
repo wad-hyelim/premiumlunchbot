@@ -10,6 +10,7 @@ FEED_URL = f"https://pcmap.place.naver.com/restaurant/{PLACE_ID}/feed?from=map&f
 def clean_text(raw):
     lines = raw.split("\n")
     result = []
+    seen = set()
     for line in lines:
         line = line.strip()
         if not line:
@@ -22,7 +23,8 @@ def clean_text(raw):
             if line.startswith(prefix):
                 line = line[len(prefix):]
                 break
-        if line:
+        if line and line not in seen:
+            seen.add(line)
             result.append(line)
     return "\n".join(result)
 
@@ -55,18 +57,19 @@ async def get_latest_notice():
                 if (items.length === 0) return { error: 'no feed items' };
                 const first = items[0];
                 const text = (first.innerText || '').trim();
-                // 프로필 이미지 제외하고 본문 이미지 추출
+                // 모든 이미지 URL 출력 (디버그)
                 const imgs = first.querySelectorAll('img');
+                const allImgs = Array.from(imgs).map(img => img.src);
+                // 프로필 이미지(ldb-phinf) 제외하고 첫 번째 이미지 추출
                 let image = null;
                 for (const img of imgs) {
                     const src = img.src || '';
-                    // 프로필 이미지(ldb-phinf)는 건너뜀
-                    if (!src.includes('ldb-phinf') && !src.includes('profile')) {
+                    if (!src.includes('ldb-phinf')) {
                         image = src;
                         break;
                     }
                 }
-                return { text, image };
+                return { text, image, allImgs };
             }
         """)
 
@@ -85,6 +88,7 @@ def main():
 
     print(f"[소식] {text[:80]}")
     print(f"[이미지] {image_url}")
+    print(f"[전체 이미지] {result.get('allImgs', [])}")
 
     send_slack(text, image_url)
     print("Slack 전송 완료")
