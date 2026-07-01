@@ -36,24 +36,33 @@ def send_slack(text, image_url=None):
 
 async def get_notices():
     notices = []
+    all_urls = []
 
     async with async_playwright() as p:
         browser = await p.chromium.launch()
         page = await browser.new_page()
 
         async def handle_response(response):
-            if "feed" in response.url and "place.naver.com" in response.url:
+            url = response.url
+            all_urls.append(url)
+            if "place.naver.com" in url:
+                print(f"[API] {url}")
                 try:
                     data = await response.json()
                     items = data.get("items", [])
-                    notices.extend(items)
-                except Exception:
-                    pass
+                    if items:
+                        print(f"  → items 발견: {len(items)}개")
+                        notices.extend(items)
+                except Exception as e:
+                    print(f"  → JSON 파싱 실패: {e}")
 
         page.on("response", handle_response)
         await page.goto(FEED_URL, wait_until="networkidle", timeout=30000)
-        await asyncio.sleep(3)
+        await asyncio.sleep(5)
         await browser.close()
+
+    if not notices:
+        print(f"[디버그] 총 {len(all_urls)}개 요청 중 place.naver.com 없음")
 
     return notices
 
