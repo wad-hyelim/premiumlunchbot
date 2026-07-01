@@ -35,36 +35,50 @@ def send_slack(text, image_url=None):
     requests.post(SLACK_WEBHOOK_URL, json={"blocks": blocks})
 
 async def get_notices():
+    notices = []
+    captured = []
+
     async with async_playwright() as p:
         browser = await p.chromium.launch()
         page = await browser.new_page()
 
-        def is_feed_response(response):
-            return (
-                "place.naver.com" in response.url
-                and "feed" in response.url
-                and response.status == 200
-            )
+        async def handle_response(response):
+            if response.status != 200:
+                return
+            url = response.url
+            content_type = response.headers.get("content-type", "")
+            if "application/json" not in content_type:
+                return
+            # naver 관련 도메인만
+            if "naver.com" not in url:
+                return
+            print(f"[JSON API] {url}")
+            try:
+                raw = await response.text()
+                data = json.loads(raw)
+                # feed 데이터 구조 탐색
+                items = (
+                    data.get("items")
+                    or data.get("feedList")
+                    or data.get("result", {}).get("items")
+                    or data.get("data", {}).get("items")
+                    or []
+                )
+                if items:
+                    print(f"  → items {len(items)}개 발견!")
+                    notices.extend(items)
+                else:
+                    keys = list(data.keys())
+                    print(f"  → 키: {keys}")
+            except Exception as e:
+                print(f"  → 파싱 실패: {e}")
 
-        async with page.expect_response(is_feed_response, timeout=30000) as response_info:
-            await page.goto(FEED_URL, wait_until="domcontentloaded", timeout=30000)
-
-        response = await response_info.value
-        print(f"[API URL] {response.url}")
-        raw = await response.text()
-        print(f"[응답 앞 500자] {raw[:500]}")
-        try:
-            data = json.loads(raw)
-        except Exception as e:
-            print(f"[JSON 파싱 실패] {e}")
-            await browser.close()
-            return []
-        print(f"[응답 키] {list(data.keys())}")
-        items = data.get("items", [])
-        print(f"[items 수] {len(items)}")
-
+        page.on("response", handle_response)
+        await page.goto(FEED_URL, wait_until="networkidle", timeout=30000)
+        await asyncio.sleep(5)
         await browser.close()
-        return items
+
+    return notices
 
 def main():
     notices = asyncio.run(get_notices())
