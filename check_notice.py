@@ -1,24 +1,13 @@
-import requests
 import json
 import os
-import sys
+import asyncio
+import requests
+from playwright.async_api import async_playwright
 
 PLACE_ID = "2015500490"
 SLACK_WEBHOOK_URL = os.environ["SLACK_WEBHOOK_URL"]
 LAST_NOTICE_FILE = "last_notice.json"
-
-HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-    "Referer": "https://map.naver.com/",
-    "Accept": "application/json",
-}
-
-def get_notices():
-    url = f"https://api.place.naver.com/place/v1/feed/{PLACE_ID}?lang=ko&offset=0&limit=5"
-    res = requests.get(url, headers=HEADERS)
-    res.raise_for_status()
-    data = res.json()
-    return data.get("items", [])
+FEED_URL = f"https://map.naver.com/p/entry/place/{PLACE_ID}?placePath=%2Ffeed"
 
 def load_last_notice():
     if not os.path.exists(LAST_NOTICE_FILE):
@@ -30,40 +19,64 @@ def save_last_notice(notice_id):
     with open(LAST_NOTICE_FILE, "w") as f:
         json.dump({"last_id": notice_id}, f)
 
-def send_slack(notice):
-    text = notice.get("body", "")
-    images = notice.get("images", [])
+def send_slack(text, image_url=None):
     blocks = [
         {
             "type": "section",
             "text": {"type": "mrkdwn", "text": f"*네이버 지도 새 소식*\n{text}"}
         }
     ]
-    for img in images[:1]:  # 첫 번째 이미지만
+    if image_url:
         blocks.append({
             "type": "image",
-            "image_url": img.get("url", ""),
+            "image_url": image_url,
             "alt_text": "공지 이미지"
         })
-    payload = {"blocks": blocks}
-    requests.post(SLACK_WEBHOOK_URL, json=payload)
+    requests.post(SLACK_WEBHOOK_URL, json={"blocks": blocks})
+
+async def get_notices():
+    notices = []
+
+    async with async_playwright() as p:
+        browser = await p.chromium.launch()
+        page = await browser.new_page()
+
+        async def handle_response(response):
+            if "feed" in response.url and "place.naver.com" in response.url:
+                try:
+                    data = await response.json()
+                    items = data.get("items", [])
+                    notices.extend(items)
+                except Exception:
+                    pass
+
+        page.on("response", handle_response)
+        await page.goto(FEED_URL, wait_until="networkidle", timeout=30000)
+        await asyncio.sleep(3)
+        await browser.close()
+
+    return notices
 
 def main():
-    notices = get_notices()
+    notices = asyncio.run(get_notices())
+
     if not notices:
         print("소식 없음")
         return
 
     latest = notices[0]
-    latest_id = latest.get("id")
-    last_id = load_last_notice()
+    latest_id = str(latest.get("id", ""))
+    last_id = str(load_last_notice() or "")
 
-    if str(latest_id) == str(last_id):
+    if latest_id == last_id:
         print("새 소식 없음")
         return
 
     print(f"새 소식 감지: {latest_id}")
-    send_slack(latest)
+    text = latest.get("body", "")
+    images = latest.get("images", [])
+    image_url = images[0].get("url") if images else None
+    send_slack(text, image_url)
     save_last_notice(latest_id)
 
 if __name__ == "__main__":
