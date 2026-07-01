@@ -1,5 +1,6 @@
 import json
 import os
+import re
 import asyncio
 import requests
 from playwright.async_api import async_playwright
@@ -35,72 +36,52 @@ def send_slack(text, image_url=None):
     requests.post(SLACK_WEBHOOK_URL, json={"blocks": blocks})
 
 async def get_notices():
-    notices = []
-    captured = []
-
     async with async_playwright() as p:
         browser = await p.chromium.launch()
         page = await browser.new_page()
 
-        async def handle_response(response):
-            if response.status != 200:
-                return
-            url = response.url
-            content_type = response.headers.get("content-type", "")
-            if "application/json" not in content_type:
-                return
-            # naver 관련 도메인만
-            if "naver.com" not in url:
-                return
-            print(f"[JSON API] {url}")
-            try:
-                raw = await response.text()
-                data = json.loads(raw)
-                # feed 데이터 구조 탐색
-                items = (
-                    data.get("items")
-                    or data.get("feedList")
-                    or data.get("result", {}).get("items")
-                    or data.get("data", {}).get("items")
-                    or []
-                )
-                if items:
-                    print(f"  → items {len(items)}개 발견!")
-                    notices.extend(items)
-                else:
-                    keys = list(data.keys())
-                    print(f"  → 키: {keys}")
-            except Exception as e:
-                print(f"  → 파싱 실패: {e}")
-
-        page.on("response", handle_response)
         await page.goto(FEED_URL, wait_until="networkidle", timeout=30000)
-        await asyncio.sleep(5)
-        await browser.close()
+        await asyncio.sleep(3)
 
-    return notices
+        # 방법 1: window.__INITIAL_STATE__ 또는 유사한 전역 변수 탐색
+        for var in ["__INITIAL_STATE__", "__PRELOADED_STATE__", "__STATE__", "naver"]:
+            try:
+                data = await page.evaluate(f"JSON.stringify(window['{var}'])")
+                if data and data != "undefined" and data != "null":
+                    print(f"[전역변수 발견] window.{var} (길이: {len(data)})")
+                    parsed = json.loads(data)
+                    # feed/items 키 탐색
+                    text_preview = json.dumps(parsed, ensure_ascii=False)[:300]
+                    print(f"  → 미리보기: {text_preview}")
+            except Exception as e:
+                print(f"[{var}] 없음")
+
+        # 방법 2: HTML 내 JSON 데이터 블록 탐색
+        html = await page.content()
+        patterns = [
+            r'"items"\s*:\s*\[.*?\]',
+            r'"feedList"\s*:\s*\[.*?\]',
+        ]
+        for pattern in patterns:
+            match = re.search(pattern, html, re.DOTALL)
+            if match:
+                print(f"[HTML 패턴 발견] {match.group(0)[:200]}")
+
+        # 방법 3: 피드 관련 DOM 요소 텍스트 추출
+        feed_texts = await page.evaluate("""
+            () => {
+                const els = document.querySelectorAll('[class*="feed"], [class*="Feed"], [class*="post"], [class*="Post"]');
+                return Array.from(els).slice(0, 5).map(el => el.innerText.slice(0, 100));
+            }
+        """)
+        if feed_texts:
+            print(f"[DOM 피드 요소] {feed_texts}")
+
+        await browser.close()
+    return []
 
 def main():
-    notices = asyncio.run(get_notices())
-
-    if not notices:
-        print("소식 없음")
-        return
-
-    latest = notices[0]
-    latest_id = str(latest.get("id", ""))
-    last_id = str(load_last_notice() or "")
-
-    if latest_id == last_id:
-        print("새 소식 없음")
-        return
-
-    print(f"새 소식 감지: {latest_id}")
-    text = latest.get("body", "")
-    images = latest.get("images", [])
-    image_url = images[0].get("url") if images else None
-    send_slack(text, image_url)
-    save_last_notice(latest_id)
+    asyncio.run(get_notices())
 
 if __name__ == "__main__":
     main()
