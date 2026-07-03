@@ -1,8 +1,6 @@
 name: Check Naver Map Notice
 
 on:
-  schedule:
-    - cron: '30 0 * * 1-5'  # 평일 오전 9시 30분 KST (UTC 0시 30분)
   workflow_dispatch:
 
 jobs:
